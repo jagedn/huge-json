@@ -1,11 +1,18 @@
 ## Parsing a huge JSON with Micronaut+Jackson 
 
-
 PoC to read a huge file with 10 millions of Json objects 
 
-At startup the application generates a dummy text file with a lot of jsons
+## Objetive
 
-When requested, a controller will read this file and parse every element "row by row" instead to reading all the file
+We want to parse a big file (> 1Gb) with an array of objects
+
+These objects are represented by two classes (only to have a more interesting use case)
+
+`MyModel` and `SubModel`
+
+- We want to sum all the `amounts` but as the size of the file we can't read it in memory so we'll parse it "on the fly"
+- Also, we want to stream all records in the file applying a filter for minimum amount
+
 
 ## Test it
 
@@ -15,38 +22,37 @@ When requested, a controller will read this file and parse every element "row by
 
 `./gradlew run`
 
-After a few seconds, the application will be ready. A new `test.json` file was created with millions of records
+## Generate a test file
 
-TIP: you can test with more (or less) number of records changing `MAX_ITEMS = 10_000_000;` at `Application.java`
+Once the application is ready, you can generate a test file:
 
-- test
+`curl localhost:8080/generate/test.json?max=10_000_000`
 
-open `localhost:8080/parse/test.json` and after a few seconds you can see the sum of all `amounts` objects
+After a few seconds, a new `test.json` file will be created with MAX random records. 
 
-INFO: every time you run the application the file is recreated so the result will be different
+Everyone will contain an incremental `amount` attribute (to generate predictable results).
+So, for example, if you create a file with three records, the sum of all amounts will be 3+2+1=6  
 
-## Objetive
+TIP: you can test with more (or less) number of records changing `max` request param
 
-We want to parse a big file (> 1Gb) with an array of objects
+## Sum all amounts
 
-These objects are represented by two classes (only to have fun)
+`curl localhost:8080/parse/sum/test.json`
 
-`MyModel` and `SubModel` 
+## Stream the file
 
-We want to sum all the `amounts` but as the size of the file we can't read it in memory so we'll parse it "on the fly"
+`curl localhost:8080/parse/stream/test.json`
 
-We'll use Jackson libraries + Micronaut
+Stream-only records with a minimum amount:
+
+`curl localhost:8080/parse/stream/test.json?min=2_231_321`
 
 ## Main part
 
-Using reactive functions we'll read the file token by token and mapping every object to our Model.
-
-Next we'll emit the `amount`
-
-Finally, we'll apply a reduce function to sum all amounts
+Using reactive functions, we'll read the file token by token and mapping every object to our Model.
 
 ```java
-return Flux.<Long>generate(sink -> {
+return Flux.<MyModel>generate(sink -> {
                     try {
                         var nextToken = parser.nextToken();
                         if (nextToken != JsonToken.START_OBJECT) {
@@ -55,19 +61,26 @@ return Flux.<Long>generate(sink -> {
                         }
 
                         var model = parser.readValueAs(MyModel.class);
-                        sink.next((long)model.amount);
+                        sink.next(model);
 
                     } catch (Exception e) {
                         LOG.error("Error ", e);
                         sink.error(e);
                     }
-
                 })
-                .onBackpressureBuffer()
-                .reduce(0L, Long::sum);
+                .cache(1_000);
 ```
+
+## Micronaut vs Jackson
+
+I don't know if Micronaut is able to stream the file in this way so I'm using the Jackson parser to iterate over
+the file and convert every JsonNode into a MyModel object.
+
+Once we have the MyModel we can use, for example, the Serdeable feature of Micronaut to render everyone in the Http
+response.
+
 
 ## GET vs POST
 
-In this PoC we are using a local file and a GET method to read it, it's not difficult to add a POST method to 
-upload the file and run the function
+In this PoC we are using local files generated in local by a GET request, but it's not difficult to add a POST method to 
+upload the file and perform the same logic
